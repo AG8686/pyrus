@@ -297,19 +297,22 @@ def main():
         tmp = df[["Дата платежа", mc]].copy()
         tmp["Дата платежа"] = pd.to_datetime(tmp["Дата платежа"], errors="coerce")
         tmp[mc] = pd.to_numeric(tmp[mc], errors="coerce")
-        tmp = tmp.dropna()
+        tmp = tmp.dropna(subset=["Дата платежа", mc])
         if not tmp.empty:
             # начало недели — понедельник (W-SUN: неделя заканчивается воскресеньем)
-            tmp["Неделя"] = tmp["Дата платежа"].dt.to_period("W-SUN").dt.start_time
-            weekly = tmp.groupby("Неделя")[mc].sum().sort_index()
-            # подпись «дд.мм – дд.мм» (пн–вс)
-            labels = [
-                f"{w:%d.%m} – {(w + pd.Timedelta(days=6)):%d.%m}"
-                for w in weekly.index
-            ]
-            weekly.index = labels
+            tmp["_week_start"] = tmp["Дата платежа"].dt.to_period("W-SUN").dt.start_time
+            weekly = (
+                tmp.groupby("_week_start", as_index=False)[mc].sum()
+                   .sort_values("_week_start")
+            )
+            weekly["Неделя"] = weekly["_week_start"].apply(
+                lambda w: f"{w:%d.%m} – {(w + pd.Timedelta(days=6)):%d.%m}"
+            )
+            chart_df = weekly[["Неделя", mc]].reset_index(drop=True)
+
             st.subheader(f"Динамика по неделям · {mc}")
-            st.bar_chart(weekly, color=ACCENT, y_label=mc, x_label="Неделя")
+            st.bar_chart(chart_df, x="Неделя", y=mc, color=ACCENT,
+                         use_container_width=True)
 
     st.subheader("Платежи")
     col_config = {mc: st.column_config.NumberColumn(mc, format="%.2f") for mc in meta["money_cols"]}
