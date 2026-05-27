@@ -19,7 +19,7 @@ DATE_FIELD_ID = 37
 TYPE_FIELD_NAME = "Тип платежа"
 TYPE_TARGET_VALUE = "Приход"
 AUTH_URL = "https://accounts.pyrus.com/api/v4/auth"
-PAGE_SIZE = 200
+PAGE_SIZE = 1000
 ACCENT = "#008C8C"
 
 
@@ -150,10 +150,9 @@ def run_report(login, key, d_from, d_to, only_income):
     money_cols = [f.get("name") for f in top_fields if f.get("type") == "money"]
     out_cols = [f.get("name") for f in top_fields]
 
-    # стратегия: серверный фильтр работает по top-level полям;
-    # если поле внутри таблицы — выгружаем БЕЗ серверного фильтра
-    # и фильтруем на клиенте по значению поля 37
-    use_server_filter = bool(date_field) and not date_in_table
+    # Серверный фильтр fld37 работает и для поля внутри таблицы
+    # (подтверждено диагностикой). Используем его всегда.
+    use_server_filter = bool(date_field)
 
     rows, cursor = [], None
     seen, kept = 0, 0
@@ -340,8 +339,8 @@ def main():
 
     note = (
         f"Период: {d_from:%d.%m.%Y} – {d_to:%d.%m.%Y} · "
-        f"поле «{meta['date_name'] or '?'}» (id {DATE_FIELD_ID}) · "
-        f"{'фильтр на сервере' if meta['use_server_filter'] else 'поле внутри таблицы — фильтр на клиенте'} · "
+        f"поле «{meta['date_name'] or '?'}» (id {DATE_FIELD_ID}"
+        f"{', в таблице' if meta['date_in_table'] else ''}) · "
         f"проверено задач: {meta['seen']}, оставлено: {meta['kept']}"
     )
     st.caption(note)
