@@ -11,6 +11,7 @@ import datetime as dt
 
 import requests
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 FORM_ID = 579058
@@ -304,19 +305,40 @@ def main():
             weekly = (
                 tmp.groupby("_week_start", as_index=False)[mc].sum()
                    .sort_values("_week_start")
+                   .reset_index(drop=True)
             )
             weekly["Неделя"] = weekly["_week_start"].apply(
                 lambda w: f"{w:%d.%m} – {(w + pd.Timedelta(days=6)):%d.%m}"
             )
-            chart_df = weekly[["Неделя", mc]].reset_index(drop=True)
+            week_order = weekly["Неделя"].tolist()
 
             st.subheader(f"Динамика по неделям · {mc}")
-            st.bar_chart(chart_df, x="Неделя", y=mc, color=ACCENT,
-                         use_container_width=True)
+            chart = (
+                alt.Chart(weekly)
+                   .mark_bar(color=ACCENT)
+                   .encode(
+                       x=alt.X("Неделя:N", sort=week_order, title="Неделя",
+                               axis=alt.Axis(labelAngle=0)),
+                       y=alt.Y(f"{mc}:Q", title=mc,
+                               axis=alt.Axis(format=",.0f")),
+                       tooltip=[
+                           alt.Tooltip("Неделя:N", title="Неделя"),
+                           alt.Tooltip(f"{mc}:Q", title=mc, format=",.2f"),
+                       ],
+                   )
+                   .properties(height=380)
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+    # таблица — прячем None в строковых колонках
+    df_display = df.copy()
+    for col in df_display.columns:
+        if df_display[col].dtype == object:
+            df_display[col] = df_display[col].where(df_display[col].notna(), "")
 
     st.subheader("Платежи")
     col_config = {mc: st.column_config.NumberColumn(mc, format="%.2f") for mc in meta["money_cols"]}
-    st.dataframe(df, use_container_width=True, hide_index=True, column_config=col_config)
+    st.dataframe(df_display, use_container_width=True, hide_index=True, column_config=col_config)
 
     stamp = f"{d_from:%Y%m%d}_{d_to:%Y%m%d}"
     c1, c2 = st.columns(2)
