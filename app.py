@@ -300,41 +300,47 @@ def main():
         tmp[mc] = pd.to_numeric(tmp[mc], errors="coerce")
         tmp = tmp.dropna(subset=["Дата платежа", mc])
         if not tmp.empty:
-            # начало недели — понедельник (W-SUN: неделя заканчивается воскресеньем)
             tmp["_week_start"] = tmp["Дата платежа"].dt.to_period("W-SUN").dt.start_time
             weekly = (
                 tmp.groupby("_week_start", as_index=False)[mc].sum()
                    .sort_values("_week_start")
                    .reset_index(drop=True)
             )
-            weekly["Неделя"] = weekly["_week_start"].apply(
+            weekly["week"] = weekly["_week_start"].apply(
                 lambda w: f"{w:%d.%m} – {(w + pd.Timedelta(days=6)):%d.%m}"
             )
-            week_order = weekly["Неделя"].tolist()
+            # Altair: переименовываем колонку, чтобы точка в имени mc не ломала разбор поля
+            chart_df = weekly[["week", mc]].rename(columns={mc: "amount"})
+            week_order = chart_df["week"].tolist()
 
             st.subheader(f"Динамика по неделям · {mc}")
             chart = (
-                alt.Chart(weekly)
+                alt.Chart(chart_df)
                    .mark_bar(color=ACCENT)
                    .encode(
-                       x=alt.X("Неделя:N", sort=week_order, title="Неделя",
+                       x=alt.X("week:N", sort=week_order, title="Неделя",
                                axis=alt.Axis(labelAngle=0)),
-                       y=alt.Y(f"{mc}:Q", title=mc,
+                       y=alt.Y("amount:Q", title=mc,
                                axis=alt.Axis(format=",.0f")),
                        tooltip=[
-                           alt.Tooltip("Неделя:N", title="Неделя"),
-                           alt.Tooltip(f"{mc}:Q", title=mc, format=",.2f"),
+                           alt.Tooltip("week:N", title="Неделя"),
+                           alt.Tooltip("amount:Q", title=mc, format=",.2f"),
                        ],
                    )
                    .properties(height=380)
             )
             st.altair_chart(chart, use_container_width=True)
 
-    # таблица — прячем None в строковых колонках
+    # таблица: чистим типы под Arrow (Streamlit рендерит через pyarrow)
     df_display = df.copy()
+    money_set = set(meta["money_cols"])
     for col in df_display.columns:
-        if df_display[col].dtype == object:
-            df_display[col] = df_display[col].where(df_display[col].notna(), "")
+        if col in money_set:
+            df_display[col] = pd.to_numeric(df_display[col], errors="coerce")
+        else:
+            df_display[col] = df_display[col].apply(
+                lambda x: "" if pd.isna(x) else str(x)
+            )
 
     st.subheader("Платежи")
     col_config = {mc: st.column_config.NumberColumn(mc, format="%.2f") for mc in meta["money_cols"]}
