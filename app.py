@@ -8,7 +8,6 @@ import time
 import io
 import calendar
 import datetime as dt
-import json
 
 import requests
 import pandas as pd
@@ -207,47 +206,7 @@ def run_report(login, key, d_from, d_to, only_income):
     }
 
 
-# ---------- диагностика ----------
-def run_diagnostic(login, key, d_from, d_to):
-    out = {"steps": []}
-    api_url, token = authenticate(login, key)
-    out["api_url"] = api_url
-    schema = api_get(api_url, token, f"forms/{FORM_ID}")
-    top_fields = schema.get("fields", [])
-    out["top_fields"] = [(f.get("id"), f.get("name"), f.get("type")) for f in top_fields]
-
-    date_field = find_field_by_id(top_fields, DATE_FIELD_ID)
-    out["date_field"] = {
-        "found": bool(date_field),
-        "name": date_field.get("name") if date_field else None,
-        "type": date_field.get("type") if date_field else None,
-        "in_table": bool(date_field) and date_field not in top_fields,
-    }
-
-    # 1. свежие 5 задач без фильтра — посмотреть формат значения поля 37
-    data = api_get(api_url, token, f"forms/{FORM_ID}/register",
-                   {"include_archived": "y", "item_count": "5"})
-    samples = []
-    for t in data.get("tasks", []):
-        v = extract_date_field_value(t, DATE_FIELD_ID)
-        samples.append({"id": t.get("id"), "raw_value_of_field_37": v,
-                        "parsed": str(parse_date_any(v))})
-    out["sample_no_filter"] = samples
-
-    # 2. с серверным фильтром по диапазону
-    params = {
-        "include_archived": "y", "item_count": "5",
-        f"fld{DATE_FIELD_ID}": f"gt{d_from.isoformat()},lt{d_to.isoformat()}",
-    }
-    data2 = api_get(api_url, token, f"forms/{FORM_ID}/register", params)
-    out["server_filter"] = {
-        "params": params,
-        "returned": len(data2.get("tasks", [])),
-        "first_ids": [t.get("id") for t in data2.get("tasks", [])[:5]],
-    }
-    return out
-
-
+# ---------- вспомогательные ----------
 def to_excel_bytes(df):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -291,8 +250,6 @@ def main():
             login = st.text_input("Логин бота", value=login)
             key = st.text_input("Секретный ключ", value=key, type="password")
         run = st.button("Построить отчёт", type="primary", use_container_width=True)
-        st.divider()
-        diag = st.button("🔎 Запустить диагностику", use_container_width=True)
 
     if isinstance(period, (tuple, list)) and len(period) == 2:
         d_from, d_to = period
@@ -303,31 +260,9 @@ def main():
         st.info("Укажите учётные данные бота.")
         return
 
-    # ---- диагностика ----
-    if diag:
-        st.subheader("Диагностика")
-        try:
-            with st.spinner("Проверяю API…"):
-                info = run_diagnostic(login, key, d_from, d_to)
-        except Exception as e:
-            st.error(f"Ошибка диагностики: {e}")
-            return
-
-        st.write("**Поле id=37 в схеме формы:**", info["date_field"])
-        st.write("**Серверный фильтр по диапазону вернул задач:**",
-                 info["server_filter"]["returned"])
-        st.code(json.dumps(info["server_filter"], ensure_ascii=False, indent=2), language="json")
-        st.write("**5 свежих задач без фильтра — как выглядит значение поля 37:**")
-        st.code(json.dumps(info["sample_no_filter"], ensure_ascii=False, indent=2), language="json")
-        with st.expander("Все поля верхнего уровня формы"):
-            st.table(pd.DataFrame(info["top_fields"], columns=["id", "Поле", "Тип"]))
-        st.info("Пришли этот вывод — по нему сразу видно, в чём дело.")
-        return
-
     # ---- отчёт ----
     if not run:
-        st.info("Слева выберите период и нажмите «Построить отчёт». "
-                "Если данных нет — нажмите «Запустить диагностику».")
+        st.info("Слева выберите период и нажмите «Построить отчёт».")
         return
 
     try:
@@ -352,11 +287,7 @@ def main():
         cols[i].metric(f"Итого: {mc}", f"{total:,.2f}".replace(",", " "))
 
     if df.empty:
-        st.warning(
-            "За выбранный период данных нет. Нажмите «🔎 Запустить диагностику» слева — "
-            "она покажет, в каком формате API возвращает поле «Дата платежа» (id 37) "
-            "и почему оно не попадает в период."
-        )
+        st.warning("За выбранный период данных нет.")
         with st.expander("Поля формы (верхний уровень)"):
             st.table(pd.DataFrame(meta["fields"], columns=["id", "Поле", "Тип"]))
         return
@@ -364,12 +295,21 @@ def main():
     if "Дата платежа" in df.columns and meta["money_cols"]:
         mc = meta["money_cols"][0]
         tmp = df[["Дата платежа", mc]].copy()
-        tmp["Дата платежа"] = pd.to_datetime(tmp["Дата платежа"], errors="coerce").dt.date
+        tmp["Дата платежа"] = pd.to_datetime(tmp["Дата платежа"], errors="coerce")
         tmp[mc] = pd.to_numeric(tmp[mc], errors="coerce")
-        daily = tmp.dropna().groupby("Дата платежа")[mc].sum()
-        if not daily.empty:
-            st.subheader(f"Динамика по дням · {mc}")
-            st.bar_chart(daily, color=ACCENT)
+        tmp = tmp.dropna()
+        if not tmp.empty:
+            # начало недели — понедельник (W-SUN: неделя заканчивается воскресеньем)
+            tmp["Неделя"] = tmp["Дата платежа"].dt.to_period("W-SUN").dt.start_time
+            weekly = tmp.groupby("Неделя")[mc].sum().sort_index()
+            # подпись «дд.мм – дд.мм» (пн–вс)
+            labels = [
+                f"{w:%d.%m} – {(w + pd.Timedelta(days=6)):%d.%m}"
+                for w in weekly.index
+            ]
+            weekly.index = labels
+            st.subheader(f"Динамика по неделям · {mc}")
+            st.bar_chart(weekly, color=ACCENT, y_label=mc, x_label="Неделя")
 
     st.subheader("Платежи")
     col_config = {mc: st.column_config.NumberColumn(mc, format="%.2f") for mc in meta["money_cols"]}
