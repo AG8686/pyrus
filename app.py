@@ -338,9 +338,7 @@ def main():
         if col in money_set:
             df_display[col] = pd.to_numeric(df_display[col], errors="coerce")
         else:
-            df_display[col] = df_display[col].apply(
-                lambda x: "" if pd.isna(x) else str(x)
-            )
+            df_display[col] = df_display[col].fillna("").astype(str).replace("nan", "")
 
     st.subheader("Платежи")
     col_config = {mc: st.column_config.NumberColumn(mc, format="%.2f") for mc in meta["money_cols"]}
