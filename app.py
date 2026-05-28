@@ -16,11 +16,39 @@ import streamlit as st
 
 FORM_ID = 579058
 DATE_FIELD_ID = 37
+INCOME_TYPE_FIELD_ID = 34          # «Тип поступления»
+INCOME_TYPE_FIELD_NAME = "Тип поступления"
 TYPE_FIELD_NAME = "Тип платежа"
 TYPE_TARGET_VALUE = "Приход"
 AUTH_URL = "https://accounts.pyrus.com/api/v4/auth"
 PAGE_SIZE = 1000
 ACCENT = "#008C8C"
+
+# Доп. отчёты: название -> список допустимых значений поля «Тип поступления»
+INCOME_REPORTS = {
+    "Поступления IT": [
+        "Мой склад доработки",
+        "Мой склад внедрение",
+        "РитейлСРМ услуга сопровождения",
+        "Услуга внедрения Амосрм",
+        "Услуга внедрения телефонии",
+        "Услуга внедрения Bitrix 24",
+        "Услуга внедрения Pyrus",
+        "Услуга внедрения Roistat",
+        "Услуга внедрения Yclients",
+        "Услуги разработчиков",
+        "Услуга сопровождения Б24",
+        "Услуга сопровождения Амо",
+        "Услуга доработка Амосрм",
+    ],
+    "Поступления PPC": [
+        "Услуга ведения РК",
+        "Услуга настройки РК",
+    ],
+    "Поступления МП": [
+        "Продвижение МП",
+    ],
+}
 
 
 def _norm(s):
@@ -114,6 +142,26 @@ def extract_date_field_value(task, target_id):
     return visit(task.get("fields", []))
 
 
+def extract_readable_by_id(task, target_id):
+    """Извлекает читаемое значение поля по id (в т.ч. из таблицы, каталога)."""
+    def visit(items):
+        for f in items or []:
+            if f.get("id") == target_id:
+                return readable(f)
+            v = f.get("value")
+            if isinstance(v, list):
+                for row in v:
+                    found = visit(row.get("cells") or [])
+                    if found is not None:
+                        return found
+            if isinstance(v, dict) and v.get("fields"):
+                found = visit(v["fields"])
+                if found is not None:
+                    return found
+        return None
+    return visit(task.get("fields", []))
+
+
 def parse_date_any(v):
     """Парсит дату из разных форматов: '2026-05-14', '14.05.2026', ISO с временем."""
     if v is None:
@@ -186,9 +234,11 @@ def run_report(login, key, d_from, d_to, only_income):
                     continue
 
             kept += 1
+            income_type = extract_readable_by_id(task, INCOME_TYPE_FIELD_ID)
             rows.append({
                 "№": task.get("id"),
                 "Дата платежа": dd.isoformat(),
+                "Тип поступления": "" if income_type is None else str(income_type),
                 **{n: by_name.get(n) for n in out_cols},
             })
 
@@ -281,18 +331,36 @@ def main():
     )
     st.caption(note)
 
+    # основной отчёт — все приходы
+    render_section("Отчёт по платежам", df, meta, d_from, d_to, show_table=True)
+
+    # доп. отчёты по «Типу поступления»
+    for title, values in INCOME_REPORTS.items():
+        wanted = {_norm(v) for v in values}
+        if "Тип поступления" in df.columns:
+            mask = df["Тип поступления"].apply(lambda x: _norm(str(x)) in wanted)
+            sub = df[mask].reset_index(drop=True)
+        else:
+            sub = df.iloc[0:0]
+        st.divider()
+        render_section(title, sub, meta, d_from, d_to, show_table=True)
+
+
+def render_section(title, df, meta, d_from, d_to, show_table=True):
+    """Рисует один отчёт: заголовок, метрики, недельный график, таблицу, выгрузку."""
+    st.header(title)
+
     cols = st.columns(1 + len(meta["money_cols"]))
     cols[0].metric("Платежей", f"{len(df)}")
     for i, mc in enumerate(meta["money_cols"], start=1):
-        total = pd.to_numeric(df[mc], errors="coerce").sum()
+        total = pd.to_numeric(df[mc], errors="coerce").sum() if not df.empty else 0
         cols[i].metric(f"Итого: {mc}", f"{total:,.2f}".replace(",", " "))
 
     if df.empty:
         st.warning("За выбранный период данных нет.")
-        with st.expander("Поля формы (верхний уровень)"):
-            st.table(pd.DataFrame(meta["fields"], columns=["id", "Поле", "Тип"]))
         return
 
+    # недельный график
     if "Дата платежа" in df.columns and meta["money_cols"]:
         mc = meta["money_cols"][0]
         tmp = df[["Дата платежа", mc]].copy()
@@ -309,7 +377,6 @@ def main():
             weekly["week"] = weekly["_week_start"].apply(
                 lambda w: f"{w:%d.%m} – {(w + pd.Timedelta(days=6)):%d.%m}"
             )
-            # Altair: переименовываем колонку, чтобы точка в имени mc не ломала разбор поля
             chart_df = weekly[["week", mc]].rename(columns={mc: "amount"})
             week_order = chart_df["week"].tolist()
 
@@ -331,7 +398,10 @@ def main():
             )
             st.altair_chart(chart, use_container_width=True)
 
-    # таблица: чистим типы под Arrow (Streamlit рендерит через pyarrow)
+    if not show_table:
+        return
+
+    # таблица: чистим типы под Arrow
     df_display = df.copy()
     money_set = set(meta["money_cols"])
     for col in df_display.columns:
@@ -345,14 +415,15 @@ def main():
     st.dataframe(df_display, use_container_width=True, hide_index=True, column_config=col_config)
 
     stamp = f"{d_from:%Y%m%d}_{d_to:%Y%m%d}"
+    safe = title.replace(" ", "_")
     c1, c2 = st.columns(2)
     c1.download_button("Скачать CSV", df.to_csv(index=False).encode("utf-8-sig"),
-                       file_name=f"pyrus_{stamp}.csv", mime="text/csv",
-                       use_container_width=True)
+                       file_name=f"{safe}_{stamp}.csv", mime="text/csv",
+                       use_container_width=True, key=f"csv_{safe}")
     c2.download_button("Скачать Excel", to_excel_bytes(df),
-                       file_name=f"pyrus_{stamp}.xlsx",
+                       file_name=f"{safe}_{stamp}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       use_container_width=True)
+                       use_container_width=True, key=f"xlsx_{safe}")
 
 
 if __name__ == "__main__":
