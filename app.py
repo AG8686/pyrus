@@ -22,7 +22,16 @@ TYPE_FIELD_NAME = "Тип платежа"
 TYPE_TARGET_VALUE = "Приход"
 AUTH_URL = "https://accounts.pyrus.com/api/v4/auth"
 PAGE_SIZE = 1000
-ACCENT = "#008C8C"
+
+# ---- фирменная палитра (в стиле Delomatika AI: тёмная тема + бирюзовый акцент) ----
+ACCENT = "#11C5B5"          # бирюзовый акцент
+ACCENT_DARK = "#0E9E91"     # притемнённый акцент (hover)
+BG = "#0B1220"              # фон страницы
+BG_PANEL = "#111A2B"        # панели/карточки
+BG_ELEV = "#16223A"         # приподнятые элементы
+TEXT = "#E8EEF6"            # основной текст
+TEXT_MUTED = "#8A9BB3"      # приглушённый текст
+BORDER = "#243349"          # границы
 
 # Доп. отчёты: название -> список допустимых значений поля «Тип поступления»
 INCOME_REPORTS = {
@@ -280,11 +289,95 @@ def get_creds():
     return login, key
 
 
+def inject_theme():
+    css = f"""
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+      :root {{
+        --accent: {ACCENT};
+        --accent-dark: {ACCENT_DARK};
+        --bg: {BG};
+        --panel: {BG_PANEL};
+        --elev: {BG_ELEV};
+        --text: {TEXT};
+        --muted: {TEXT_MUTED};
+        --border: {BORDER};
+      }}
+
+      .stApp {{ background: var(--bg); color: var(--text); }}
+      html, body, [class*="css"] {{
+        font-family: 'Inter', -apple-system, system-ui, sans-serif !important;
+      }}
+
+      /* заголовки */
+      h1, h2, h3, h4 {{ color: var(--text) !important; font-weight: 700 !important; letter-spacing:-.01em; }}
+      h1 {{ font-weight: 800 !important; }}
+
+      /* акцентная плашка-бренд */
+      .brand-badge {{
+        display:inline-block; padding:4px 12px; border-radius:999px;
+        background:rgba(17,197,181,.12); color:var(--accent);
+        font-size:13px; font-weight:600; margin-bottom:14px;
+        border:1px solid rgba(17,197,181,.3);
+      }}
+      .report-divider {{ height:1px; background:var(--border); border:none; margin:34px 0 6px; }}
+
+      /* сайдбар */
+      section[data-testid="stSidebar"] {{
+        background: var(--panel); border-right:1px solid var(--border);
+      }}
+
+      /* кнопки */
+      .stButton > button {{
+        background: var(--accent) !important; color:#06231F !important;
+        border:none !important; border-radius:10px !important;
+        font-weight:700 !important; padding:.55rem 1rem !important;
+        transition:all .15s ease !important;
+      }}
+      .stButton > button:hover {{ background: var(--accent-dark) !important; transform:translateY(-1px); }}
+      .stDownloadButton > button {{
+        background: transparent !important; color: var(--accent) !important;
+        border:1px solid var(--accent) !important; border-radius:10px !important;
+        font-weight:600 !important;
+      }}
+      .stDownloadButton > button:hover {{ background:rgba(17,197,181,.1) !important; }}
+
+      /* метрики-карточки */
+      div[data-testid="stMetric"] {{
+        background: var(--panel); border:1px solid var(--border);
+        border-radius:14px; padding:16px 18px;
+      }}
+      div[data-testid="stMetricValue"] {{ color: var(--text) !important; font-weight:700; }}
+      div[data-testid="stMetricLabel"] {{ color: var(--muted) !important; }}
+
+      /* инпуты */
+      div[data-baseweb="input"], div[data-baseweb="select"] > div {{
+        background: var(--elev) !important; border-color: var(--border) !important;
+        border-radius:10px !important;
+      }}
+      .stCheckbox, .stDateInput label, .stTextInput label {{ color: var(--text) !important; }}
+
+      /* таблица */
+      div[data-testid="stDataFrame"] {{
+        border:1px solid var(--border); border-radius:12px; overflow:hidden;
+      }}
+
+      /* подписи/caption */
+      div[data-testid="stCaptionContainer"], .stCaption {{ color: var(--muted) !important; }}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+
 def main():
-    st.set_page_config(page_title="Отчёт по платежам", page_icon="💰", layout="wide")
+    st.set_page_config(page_title="Деломатика · Отчёт по поступлениям",
+                       page_icon="📊", layout="wide")
+    inject_theme()
     st.markdown(
-        "<h1 style='margin-bottom:0'>Отчёт по платежам</h1>"
-        f"<p style='color:gray;margin-top:4px'>Pyrus · форма {FORM_ID} · "
+        "<div class='brand-badge'>Деломатика · AI-направление</div>"
+        "<h1 style='margin-bottom:2px'>Отчёт по поступлениям</h1>"
+        f"<p style='color:var(--muted);margin-top:4px'>Pyrus · форма {FORM_ID} · "
         f"поле «Дата платежа» (id {DATE_FIELD_ID})</p>",
         unsafe_allow_html=True,
     )
@@ -332,7 +425,7 @@ def main():
     st.caption(note)
 
     # основной отчёт — все приходы
-    render_section("Отчёт по платежам", df, meta, d_from, d_to, show_table=True)
+    render_section("Отчёт по поступлениям", df, meta, d_from, d_to, show_table=True)
 
     # доп. отчёты по «Типу поступления»
     for title, values in INCOME_REPORTS.items():
@@ -342,7 +435,7 @@ def main():
             sub = df[mask].reset_index(drop=True)
         else:
             sub = df.iloc[0:0]
-        st.divider()
+        st.markdown("<hr class='report-divider'>", unsafe_allow_html=True)
         render_section(title, sub, meta, d_from, d_to, show_table=True)
 
 
@@ -383,18 +476,25 @@ def render_section(title, df, meta, d_from, d_to, show_table=True):
             st.subheader(f"Динамика по неделям · {mc}")
             chart = (
                 alt.Chart(chart_df)
-                   .mark_bar(color=ACCENT)
+                   .mark_bar(color=ACCENT, cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
                    .encode(
                        x=alt.X("week:N", sort=week_order, title="Неделя",
-                               axis=alt.Axis(labelAngle=0)),
+                               axis=alt.Axis(labelAngle=0, labelColor=TEXT_MUTED,
+                                             titleColor=TEXT_MUTED, domainColor=BORDER,
+                                             tickColor=BORDER)),
                        y=alt.Y("amount:Q", title=mc,
-                               axis=alt.Axis(format=",.0f")),
+                               axis=alt.Axis(format=",.0f", labelColor=TEXT_MUTED,
+                                             titleColor=TEXT_MUTED, domainColor=BORDER,
+                                             gridColor=BORDER, tickColor=BORDER)),
                        tooltip=[
                            alt.Tooltip("week:N", title="Неделя"),
                            alt.Tooltip("amount:Q", title=mc, format=",.2f"),
                        ],
                    )
                    .properties(height=380)
+                   .configure(background="transparent")
+                   .configure_view(strokeWidth=0)
+                   .configure_axis(grid=True)
             )
             st.altair_chart(chart, use_container_width=True)
 
