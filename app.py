@@ -402,28 +402,68 @@ def main():
     login, key = get_creds()
 
     with st.sidebar:
-        st.subheader("Параметры")
+        st.subheader("Параметры для отчёта по поступлениям")
         d_from, d_to = current_month()
-        period = st.date_input("Дата платежа (период)", value=(d_from, d_to), format="DD.MM.YYYY")
-        only_income = True  # фильтр «Приход» включён всегда
+        period = st.date_input("Дата платежа (период)", value=(d_from, d_to),
+                               format="DD.MM.YYYY", key="main_period")
         if not login or not key:
             st.info("Учётные данные бота не заданы в Secrets — введите вручную:")
             login = st.text_input("Логин бота", value=login)
             key = st.text_input("Секретный ключ", value=key, type="password")
-        run = st.button("Построить отчёт", type="primary", use_container_width=True)
+        if st.button("Построить отчёт", type="primary", use_container_width=True,
+                     key="run_main"):
+            st.session_state["show_main"] = True
+            st.session_state["show_compare"] = False
+
+        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+        st.subheader("Параметры для сравнения периодов")
+        a_from, a_to = current_month()
+        prev_first = (a_from - dt.timedelta(days=1)).replace(day=1)
+        prev_last = a_from - dt.timedelta(days=1)
+        period_a = st.date_input("Даты периода A", value=(a_from, a_to),
+                                 format="DD.MM.YYYY", key="period_a")
+        period_b = st.date_input("Даты периода B", value=(prev_first, prev_last),
+                                 format="DD.MM.YYYY", key="period_b")
+        if st.button("Построить отчёт", type="primary", use_container_width=True,
+                     key="run_compare"):
+            st.session_state["show_compare"] = True
+            st.session_state["show_main"] = False
+
+    if not login or not key:
+        st.info("Укажите учётные данные бота.")
+        return
+
+    only_income = True  # фильтр «Приход» включён всегда
+
+    # ---- режим сравнения периодов ----
+    if st.session_state.get("show_compare"):
+        a = period_a if isinstance(period_a, (tuple, list)) and len(period_a) == 2 else None
+        b = period_b if isinstance(period_b, (tuple, list)) and len(period_b) == 2 else None
+        if not a or not b:
+            st.error("Выберите обе даты в периодах A и B.")
+            return
+        if a[0] > a[1] or b[0] > b[1]:
+            st.error("В одном из периодов начало позже конца.")
+            return
+        try:
+            with st.spinner("Загружаю данные за оба периода…"):
+                df_a, meta_a = run_report(login, key, a[0], a[1], only_income)
+                df_b, meta_b = run_report(login, key, b[0], b[1], only_income)
+        except Exception as e:
+            st.error(f"Ошибка: {e}")
+            return
+        render_comparison(df_a, df_b, meta_a, a, b)
+        return
+
+    # ---- обычный отчёт по поступлениям ----
+    if not st.session_state.get("show_main"):
+        st.info("Слева выберите период и нажмите «Построить отчёт».")
+        return
 
     if isinstance(period, (tuple, list)) and len(period) == 2:
         d_from, d_to = period
     if d_from > d_to:
         st.error("Начало периода позже конца.")
-        return
-    if not login or not key:
-        st.info("Укажите учётные данные бота.")
-        return
-
-    # ---- отчёт ----
-    if not run:
-        st.info("Слева выберите период и нажмите «Построить отчёт».")
         return
 
     try:
@@ -446,6 +486,15 @@ def main():
         render_section("Отчёт по поступлениям", df, meta, d_from, d_to, show_table=True)
 
     # доп. отчёты по «Типу поступления»
+    for title, sub in split_by_categories(df)[1:]:
+        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            render_section(title, sub, meta, d_from, d_to, show_table=True)
+
+
+def split_by_categories(df):
+    """Возвращает список (название, под-df): общий отчёт + 3 группы по «Типу поступления»."""
+    result = [("Отчёт по поступлениям", df)]
     for title, values in INCOME_REPORTS.items():
         wanted = {_norm(v) for v in values}
         if "Тип поступления" in df.columns:
@@ -453,9 +502,14 @@ def main():
             sub = df[mask].reset_index(drop=True)
         else:
             sub = df.iloc[0:0]
-        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            render_section(title, sub, meta, d_from, d_to, show_table=True)
+        result.append((title, sub))
+    return result
+
+
+def money_total(df, mc):
+    if df.empty or mc not in df.columns:
+        return 0.0
+    return float(pd.to_numeric(df[mc], errors="coerce").sum())
 
 
 def render_section(title, df, meta, d_from, d_to, show_table=True):
@@ -546,6 +600,105 @@ def render_section(title, df, meta, d_from, d_to, show_table=True):
                        file_name=f"{safe}_{stamp}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        use_container_width=True, key=f"xlsx_{safe}")
+
+
+def _fmt_money(v):
+    return f"{v:,.2f}".replace(",", " ")
+
+
+def render_comparison(df_a, df_b, meta, period_a, period_b):
+    st.markdown(
+        "<h1 style='margin-bottom:2px'>Сравнение периодов по поступлению</h1>",
+        unsafe_allow_html=True,
+    )
+    a_label = f"{period_a[0]:%d.%m.%Y} – {period_a[1]:%d.%m.%Y}"
+    b_label = f"{period_b[0]:%d.%m.%Y} – {period_b[1]:%d.%m.%Y}"
+    st.caption(f"Период A: {a_label}  ·  Период B: {b_label}")
+
+    mc = meta["money_cols"][0] if meta["money_cols"] else None
+    if not mc:
+        st.warning("В форме не найдено денежного поля для сравнения.")
+        return
+
+    cats_a = dict(split_by_categories(df_a))
+    cats_b = dict(split_by_categories(df_b))
+
+    for cat_name in cats_a.keys():
+        sub_a, sub_b = cats_a[cat_name], cats_b[cat_name]
+        total_a = money_total(sub_a, mc)
+        total_b = money_total(sub_b, mc)
+        delta = total_a - total_b
+        pct = (delta / total_b * 100) if total_b else (100.0 if total_a else 0.0)
+        sign = "▲" if delta > 0 else ("▼" if delta < 0 else "—")
+        pct_txt = "—" if (total_b == 0 and total_a == 0) else f"{sign} {pct:+.1f}%"
+
+        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(
+                f"<div class='section-head'><h2>{cat_name} – сравнение периодов A / B</h2></div>",
+                unsafe_allow_html=True,
+            )
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric(f"Период A · {mc}", _fmt_money(total_a))
+            c2.metric(f"Период B · {mc}", _fmt_money(total_b))
+            c3.metric("Прирост, ₽", _fmt_money(delta))
+            c4.metric("Прирост, %", pct_txt)
+
+            # сгруппированный график: два столбца A и B
+            comp_df = pd.DataFrame({
+                "Период": [f"A\n{a_label}", f"B\n{b_label}"],
+                "amount": [total_a, total_b],
+                "key": ["A", "B"],
+            })
+            bars = (
+                alt.Chart(comp_df)
+                   .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                   .encode(
+                       x=alt.X("Период:N", title=None, sort=["A", "B"],
+                               axis=alt.Axis(labelAngle=0, labelColor=TEXT_MUTED,
+                                             domainColor=BORDER, tickColor=BORDER)),
+                       y=alt.Y("amount:Q", title=mc,
+                               axis=alt.Axis(format=",.0f", labelColor=TEXT_MUTED,
+                                             titleColor=TEXT_MUTED, domainColor=BORDER,
+                                             gridColor=BORDER, tickColor=BORDER)),
+                       color=alt.Color("key:N",
+                                       scale=alt.Scale(domain=["A", "B"],
+                                                       range=[ACCENT, "#5B7290"]),
+                                       legend=None),
+                       tooltip=[alt.Tooltip("key:N", title="Период"),
+                                alt.Tooltip("amount:Q", title=mc, format=",.2f")],
+                   )
+            )
+            labels = (
+                alt.Chart(comp_df)
+                   .mark_text(dy=-8, color=TEXT, fontWeight="bold")
+                   .encode(x=alt.X("Период:N", sort=["A", "B"]),
+                           y="amount:Q",
+                           text=alt.Text("amount:Q", format=",.0f"))
+            )
+            chart = (
+                (bars + labels).properties(height=340)
+                .configure(background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+            # наглядная плашка прироста/падения
+            if delta > 0:
+                color, word = ACCENT, "Прирост"
+            elif delta < 0:
+                color, word = "#FF6B6B", "Падение"
+            else:
+                color, word = TEXT_MUTED, "Без изменений"
+            st.markdown(
+                f"<div style='padding:14px 18px;border-radius:12px;"
+                f"background:rgba(17,197,181,.08);border-left:5px solid {color};'>"
+                f"<span style='font-size:18px;font-weight:700;color:{color}'>"
+                f"{word}: {_fmt_money(delta)} ₽ ({pct_txt})</span>"
+                f"<br><span style='color:{TEXT_MUTED}'>A ({a_label}): {_fmt_money(total_a)} ₽ "
+                f"&nbsp;·&nbsp; B ({b_label}): {_fmt_money(total_b)} ₽</span></div>",
+                unsafe_allow_html=True,
+            )
 
 
 if __name__ == "__main__":
