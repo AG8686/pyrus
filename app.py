@@ -321,7 +321,16 @@ def inject_theme():
         font-size:13px; font-weight:600; margin-bottom:14px;
         border:1px solid rgba(17,197,181,.3);
       }}
-      .report-divider {{ height:1px; background:var(--border); border:none; margin:34px 0 6px; }}
+
+      /* заголовок отчёта-секции */
+      .section-head {{
+        display:flex; align-items:center; gap:12px;
+        margin:0 0 18px; padding:14px 20px;
+        background:linear-gradient(90deg, rgba(17,197,181,.16), rgba(17,197,181,.02));
+        border-left:5px solid var(--accent); border-radius:12px;
+      }}
+      .section-head h2 {{ margin:0 !important; font-size:1.5rem !important; }}
+      .section-gap {{ height:40px; }}
 
       /* сайдбар */
       section[data-testid="stSidebar"] {{
@@ -363,6 +372,15 @@ def inject_theme():
         border:1px solid var(--border); border-radius:12px; overflow:hidden;
       }}
 
+      /* карточка-секция отчёта (st.container border=True) */
+      div[data-testid="stVerticalBlockBorderWrapper"] {{
+        background: var(--panel);
+        border:1px solid var(--border) !important;
+        border-radius:18px !important;
+        padding:8px 22px 18px !important;
+        box-shadow:0 6px 24px rgba(0,0,0,.25);
+      }}
+
       /* подписи/caption */
       div[data-testid="stCaptionContainer"], .stCaption {{ color: var(--muted) !important; }}
     </style>
@@ -375,7 +393,6 @@ def main():
                        page_icon="📊", layout="wide")
     inject_theme()
     st.markdown(
-        "<div class='brand-badge'>Деломатика · AI-направление</div>"
         "<h1 style='margin-bottom:2px'>Отчёт по поступлениям</h1>"
         f"<p style='color:var(--muted);margin-top:4px'>Pyrus · форма {FORM_ID} · "
         f"поле «Дата платежа» (id {DATE_FIELD_ID})</p>",
@@ -388,7 +405,7 @@ def main():
         st.subheader("Параметры")
         d_from, d_to = current_month()
         period = st.date_input("Дата платежа (период)", value=(d_from, d_to), format="DD.MM.YYYY")
-        only_income = st.checkbox(f"Только «{TYPE_TARGET_VALUE}»", value=True)
+        only_income = True  # фильтр «Приход» включён всегда
         if not login or not key:
             st.info("Учётные данные бота не заданы в Secrets — введите вручную:")
             login = st.text_input("Логин бота", value=login)
@@ -425,7 +442,8 @@ def main():
     st.caption(note)
 
     # основной отчёт — все приходы
-    render_section("Отчёт по поступлениям", df, meta, d_from, d_to, show_table=True)
+    with st.container(border=True):
+        render_section("Отчёт по поступлениям", df, meta, d_from, d_to, show_table=True)
 
     # доп. отчёты по «Типу поступления»
     for title, values in INCOME_REPORTS.items():
@@ -435,13 +453,17 @@ def main():
             sub = df[mask].reset_index(drop=True)
         else:
             sub = df.iloc[0:0]
-        st.markdown("<hr class='report-divider'>", unsafe_allow_html=True)
-        render_section(title, sub, meta, d_from, d_to, show_table=True)
+        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            render_section(title, sub, meta, d_from, d_to, show_table=True)
 
 
 def render_section(title, df, meta, d_from, d_to, show_table=True):
     """Рисует один отчёт: заголовок, метрики, недельный график, таблицу, выгрузку."""
-    st.header(title)
+    st.markdown(
+        f"<div class='section-head'><h2>{title}</h2></div>",
+        unsafe_allow_html=True,
+    )
 
     cols = st.columns(1 + len(meta["money_cols"]))
     cols[0].metric("Платежей", f"{len(df)}")
