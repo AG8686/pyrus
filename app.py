@@ -18,6 +18,8 @@ FORM_ID = 579058
 DATE_FIELD_ID = 37
 INCOME_TYPE_FIELD_ID = 34          # «Тип поступления»
 INCOME_TYPE_FIELD_NAME = "Тип поступления"
+WIDGET_FIELD_ID = None             # ← ВПИШИ Field ID поля «Виджет» (например, 41)
+WIDGET_FIELD_NAME = "Виджет"
 TYPE_FIELD_NAME = "Тип платежа"
 TYPE_TARGET_VALUE = "Приход"
 AUTH_URL = "https://accounts.pyrus.com/api/v4/auth"
@@ -57,9 +59,10 @@ INCOME_REPORTS = {
     "Поступления МП": [
         "Продвижение МП",
     ],
-    "Поступления WBOX": [
-        "Амосрм виджеты",
-    ],
+    "Поступления WBOX": {
+        "values": ["Амосрм виджеты"],
+        "require_nonempty": "Виджет",   # поле «Виджет» должно быть заполнено
+    },
 }
 
 
@@ -247,10 +250,13 @@ def run_report(login, key, d_from, d_to, only_income):
 
             kept += 1
             income_type = extract_readable_by_id(task, INCOME_TYPE_FIELD_ID)
+            widget_val = (extract_readable_by_id(task, WIDGET_FIELD_ID)
+                          if WIDGET_FIELD_ID is not None else None)
             rows.append({
                 "№": task.get("id"),
                 "Дата платежа": dd.isoformat(),
                 "Тип поступления": "" if income_type is None else str(income_type),
+                "Виджет": "" if widget_val is None else str(widget_val),
                 **{n: by_name.get(n) for n in out_cols},
             })
 
@@ -496,13 +502,27 @@ def main():
 
 
 def split_by_categories(df):
-    """Возвращает список (название, под-df): общий отчёт + 3 группы по «Типу поступления»."""
+    """Возвращает список (название, под-df): общий отчёт + группы по «Типу поступления»."""
     result = [("Отчёт по поступлениям", df)]
-    for title, values in INCOME_REPORTS.items():
+    for title, spec in INCOME_REPORTS.items():
+        if isinstance(spec, dict):
+            values = spec.get("values", [])
+            require_nonempty = spec.get("require_nonempty")
+        else:
+            values = spec
+            require_nonempty = None
+
         wanted = {_norm(v) for v in values}
         if "Тип поступления" in df.columns:
             mask = df["Тип поступления"].apply(lambda x: _norm(str(x)) in wanted)
-            sub = df[mask].reset_index(drop=True)
+            sub = df[mask]
+            # доп. условие: указанное поле должно быть непустым
+            if require_nonempty and require_nonempty in sub.columns:
+                nonempty = sub[require_nonempty].apply(
+                    lambda x: str(x).strip() not in ("", "None", "nan")
+                )
+                sub = sub[nonempty]
+            sub = sub.reset_index(drop=True)
         else:
             sub = df.iloc[0:0]
         result.append((title, sub))
